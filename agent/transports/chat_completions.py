@@ -18,6 +18,15 @@ from agent.prompt_builder import DEVELOPER_ROLE_MODELS
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall, Usage
 
+# Session-replay metadata attached by hermes_state._replay_session_messages().
+# Not part of the Chat Completions request schema — strict providers reject them.
+_INTERNAL_MESSAGE_METADATA_KEYS = frozenset({
+    "timestamp",
+    "message_id",
+    "observed",
+    "finish_reason",
+})
+
 
 def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> dict | None:
     """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig."""
@@ -160,6 +169,12 @@ class ChatCompletionsTransport(ProviderTransport):
           gateways (e.g. opencode-go, codex.nekos.me) reject with
           ``Extra inputs are not permitted, field: 'messages[N]._empty_recovery_synthetic'``,
           which then poisons every subsequent request in the session.
+        - SQLite session-replay metadata — ``timestamp``, ``message_id``,
+          ``observed``, ``finish_reason``. Gateway mode reloads sessions from
+          ``state.db`` via ``_replay_session_messages()``, which rehydrates
+          these internal fields onto message dicts. CLI mode never attaches
+          them, so the leak only surfaces in gateway sessions and only with
+          strict validators (e.g. GLM via opencode-go).
         """
         strip_extra_content = not _model_consumes_thought_signature(
             kwargs.get("model")
@@ -172,6 +187,7 @@ class ChatCompletionsTransport(ProviderTransport):
                 "codex_reasoning_items" in msg
                 or "codex_message_items" in msg
                 or "tool_name" in msg
+                or _INTERNAL_MESSAGE_METADATA_KEYS.intersection(msg)
             ):
                 needs_sanitize = True
                 break
@@ -201,6 +217,8 @@ class ChatCompletionsTransport(ProviderTransport):
             msg.pop("codex_reasoning_items", None)
             msg.pop("codex_message_items", None)
             msg.pop("tool_name", None)
+            for key in _INTERNAL_MESSAGE_METADATA_KEYS:
+                msg.pop(key, None)
             # Drop all Hermes-internal scaffolding markers (``_``-prefixed).
             # OpenAI's message schema has no ``_``-prefixed fields, so this
             # is safe and future-proofs against new markers being added.

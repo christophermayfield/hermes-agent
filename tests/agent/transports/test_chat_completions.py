@@ -128,6 +128,26 @@ class TestChatCompletionsBasic:
         # Original list untouched (deepcopy-on-demand)
         assert msgs[1]["_empty_recovery_synthetic"] is True
 
+    def test_convert_messages_strips_session_replay_metadata(self, transport):
+        """Gateway session reload attaches SQLite metadata that strict providers
+        reject. These fields are internal bookkeeping and must not reach the wire.
+        """
+        msgs = [
+            {"role": "user", "content": "hi", "timestamp": 1781799468.409,
+             "message_id": "discord-123", "observed": True},
+            {"role": "assistant", "content": "hello",
+             "finish_reason": "stop", "timestamp": 1781799469.1},
+        ]
+        result = transport.convert_messages(msgs)
+        for key in ("timestamp", "message_id", "observed", "finish_reason"):
+            assert key not in result[0], key
+            assert key not in result[1], key
+        assert result[0]["content"] == "hi"
+        assert result[1]["content"] == "hello"
+        # Original list untouched (deepcopy-on-demand)
+        assert msgs[0]["timestamp"] == 1781799468.409
+        assert msgs[1]["finish_reason"] == "stop"
+
     def test_convert_messages_clean_list_is_identity(self, transport):
         """A list with no internal/codex keys is returned as-is (no copy)."""
         msgs = [
